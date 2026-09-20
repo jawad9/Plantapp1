@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -31,3 +31,25 @@ jobs:
           name: sproutroll-jungle-glow-apk
           path: build/app/outputs/flutter-apk/app-release.apk
           retention-days: 14
+
+      # Also commit the APK straight into a dedicated branch. Some sandboxed
+      # environments can't reach the Azure blob storage host that workflow
+      # artifact downloads redirect to, but plain `git fetch` against
+      # GitHub itself always works - so this is the reliable way to pull
+      # the built binary back down.
+      - name: Publish APK to apk-builds branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          mkdir -p /tmp/apk-out
+          cp build/app/outputs/flutter-apk/app-release.apk /tmp/apk-out/sproutroll-jungle-glow.apk
+          git checkout --orphan apk-builds-tmp
+          git rm -rf . >/dev/null 2>&1 || true
+          mkdir -p dist
+          cp /tmp/apk-out/sproutroll-jungle-glow.apk dist/sproutroll-jungle-glow.apk
+          echo "Built from commit ${GITHUB_SHA} on $(date -u +%Y-%m-%dT%H:%M:%SZ)" > dist/BUILD_INFO.txt
+          git add dist
+          git commit -m "Build APK from ${GITHUB_SHA}"
+          git branch -D apk-builds 2>/dev/null || true
+          git branch -m apk-builds
+          git push origin apk-builds --force
