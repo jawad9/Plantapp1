@@ -53,3 +53,18 @@ jobs:
           git branch -D apk-builds 2>/dev/null || true
           git branch -m apk-builds
           git push origin apk-builds --force
+
+      # A GitHub Release asset gives a stable, directly-downloadable URL
+      # (served from GitHub's own CDN) that works from any ordinary
+      # browser, regardless of what a given CI/sandbox environment's
+      # egress policy allows.
+      - name: Publish GitHub Release with APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest-build --yes --cleanup-tag || true
+          gh release create latest-build \
+            /tmp/apk-out/sproutroll-jungle-glow.apk \
+            --title "SproutRoll - latest build" \
+            --notes "Automated build from commit ${GITHUB_SHA}." \
+            --target "${GITHUB_SHA}"
