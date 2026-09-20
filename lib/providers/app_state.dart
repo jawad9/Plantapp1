@@ -1,4 +1,7 @@
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../data/quest_bank.dart';
 import '../data/store_bank.dart';
@@ -23,6 +26,17 @@ class AppState extends ChangeNotifier {
   final List<CompletedQuest> _history = [];
 
   Quest? _pendingQuest;
+
+  static const _secureStorage = FlutterSecureStorage();
+  static const _geminiKeysStorageKey = 'gemini_api_keys';
+  static const _geminiActiveIndexStorageKey = 'gemini_active_key_index';
+
+  final List<String> _geminiApiKeys = [];
+  int _activeGeminiKeyIndex = 0;
+
+  List<String> get geminiApiKeys => List.unmodifiable(_geminiApiKeys);
+  int get activeGeminiKeyIndex => _activeGeminiKeyIndex;
+  bool get hasGeminiKeys => _geminiApiKeys.isNotEmpty;
 
   int get coins => _coins;
   int get scanCredits => _scanCredits;
@@ -138,6 +152,86 @@ class AppState extends ChangeNotifier {
   /// Debug/demo helper to top the scan credits back up (e.g. new day).
   void resetDailyScans() {
     _scanCredits = maxScanCredits;
+    notifyListeners();
+  }
+
+  /// Loads persisted Gemini API keys from secure storage. Call once at
+  /// startup, before the first frame, so Settings shows saved keys right
+  /// away.
+  Future<void> init() async {
+    try {
+      final storedKeys = await _secureStorage.read(key: _geminiKeysStorageKey);
+      if (storedKeys != null && storedKeys.isNotEmpty) {
+        final decoded = (jsonDecode(storedKeys) as List<dynamic>).cast<String>();
+        _geminiApiKeys
+          ..clear()
+          ..addAll(decoded);
+      }
+      final storedIndex = await _secureStorage.read(key: _geminiActiveIndexStorageKey);
+      if (storedIndex != null) {
+        _activeGeminiKeyIndex = int.tryParse(storedIndex) ?? 0;
+      }
+    } catch (e) {
+      // Secure storage can be unavailable (e.g. a locked keyring on desktop
+      // Linux, or a first-run platform quirk). Degrade to "no saved keys"
+      // rather than blocking app startup entirely.
+      debugPrint('AppState.init: could not read secure storage: $e');
+    }
+    if (_geminiApiKeys.isEmpty || _activeGeminiKeyIndex >= _geminiApiKeys.length) {
+      _activeGeminiKeyIndex = 0;
+    }
+    notifyListeners();
+  }
+
+  Future<void> _persistGeminiKeys() async {
+    try {
+      await _secureStorage.write(key: _geminiKeysStorageKey, value: jsonEncode(_geminiApiKeys));
+    } catch (e) {
+      debugPrint('AppState: could not persist Gemini API keys: $e');
+    }
+  }
+
+  Future<void> _persistActiveGeminiIndex() async {
+    try {
+      await _secureStorage.write(
+        key: _geminiActiveIndexStorageKey,
+        value: '$_activeGeminiKeyIndex',
+      );
+    } catch (e) {
+      debugPrint('AppState: could not persist active Gemini key index: $e');
+    }
+  }
+
+  /// Adds a Gemini API key to the fallback pool (persisted to secure
+  /// storage). Returns false if the key is blank or already added.
+  Future<bool> addGeminiApiKey(String key) async {
+    final trimmed = key.trim();
+    if (trimmed.isEmpty || _geminiApiKeys.contains(trimmed)) return false;
+    _geminiApiKeys.add(trimmed);
+    await _persistGeminiKeys();
+    notifyListeners();
+    return true;
+  }
+
+  /// Removes a key from the pool, adjusting the active index if needed.
+  Future<void> removeGeminiApiKey(int index) async {
+    if (index < 0 || index >= _geminiApiKeys.length) return;
+    _geminiApiKeys.removeAt(index);
+    if (_activeGeminiKeyIndex >= _geminiApiKeys.length) {
+      _activeGeminiKeyIndex = _geminiApiKeys.isEmpty ? 0 : _geminiApiKeys.length - 1;
+    }
+    await _persistGeminiKeys();
+    await _persistActiveGeminiIndex();
+    notifyListeners();
+  }
+
+  /// Called after a successful Gemini call so future requests start from
+  /// whichever key actually worked, skipping straight past exhausted ones
+  /// instead of retrying them every time.
+  void reportWorkingGeminiKeyIndex(int index) {
+    if (index == _activeGeminiKeyIndex || index < 0 || index >= _geminiApiKeys.length) return;
+    _activeGeminiKeyIndex = index;
+    _persistActiveGeminiIndex();
     notifyListeners();
   }
 }

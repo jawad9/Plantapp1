@@ -8,6 +8,7 @@ import '../data/quest_bank.dart';
 import '../models/quest.dart';
 import '../models/quest_type.dart';
 import '../providers/app_state.dart';
+import '../services/gemini_service.dart';
 import '../theme/app_colors.dart';
 import '../utils/modal_route.dart';
 import '../widgets/glass_card.dart';
@@ -104,16 +105,36 @@ class _QuestResultScreenState extends State<QuestResultScreen>
       return;
     }
 
+    final photo = File(file.path);
     setState(() {
-      _photo = File(file!.path);
+      _photo = photo;
       _stage = _Stage.scanning;
     });
 
-    _scanController.forward(from: 0);
-    await Future.delayed(const Duration(milliseconds: 2000));
+    String diagnosis;
+    if (appState.hasGeminiKeys) {
+      _scanController.repeat();
+      try {
+        final result = await GeminiService.analyzeImage(
+          apiKeys: appState.geminiApiKeys,
+          startIndex: appState.activeGeminiKeyIndex,
+          image: photo,
+        );
+        appState.reportWorkingGeminiKeyIndex(result.workingKeyIndex);
+        diagnosis = result.text;
+      } on GeminiException catch (e) {
+        diagnosis = 'AI analysis unavailable (${e.message}). Demo tip: ${QuestBank.randomDiagnosis()}';
+      } catch (e) {
+        diagnosis = 'AI analysis failed. Demo tip: ${QuestBank.randomDiagnosis()}';
+      } finally {
+        _scanController.stop();
+      }
+    } else {
+      await _scanController.forward(from: 0);
+      diagnosis = QuestBank.randomDiagnosis();
+    }
     if (!mounted) return;
 
-    final diagnosis = QuestBank.randomDiagnosis();
     final quest = appState.submitDiagnosis(diagnosis);
     setState(() {
       _quest = quest;
